@@ -92,7 +92,13 @@ def set_stock_data(fund, exchCodes_list):
         ticker = ','.join([d['ticker'] for d in result[0].get('data', [])])
         us_ticker = ','.join([d['ticker'] for d in us_result[0].get('data', [])])
         name = ','.join([d['name'] for d in result[0].get('data', [])])
-        business, financial = get_zoya(get_fixed_assets("zoya_url"), get_fixed_assets("zoya_headers"), ticker)
+        
+        try:
+            business, financial = get_zoya(get_fixed_assets("zoya_url"), get_fixed_assets("zoya_headers"), us_ticker)
+        except Exception as error:
+            print(error, fund_index)
+            business = "Unrated"
+            financial = "unrated"
                 
         fund.loc[fund.index == fund_index, ['Ticker']] = ticker
         fund.loc[fund.index == fund_index, ['US_Ticker']] = us_ticker
