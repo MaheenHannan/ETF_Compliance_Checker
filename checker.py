@@ -8,6 +8,8 @@ import warnings
 import requests
 from time import sleep
 import pycountry_convert as pc
+import math
+from currency_converter import CurrencyConverter
 
 def country_to_continent(country_name):
     country_alpha2 = pc.country_name_to_country_alpha2(country_name)
@@ -47,25 +49,44 @@ def map_jobs(jobs):
             connection = opener.open(request)
             break
         except Exception as error:
-            print("OpenFigi error, retrying in 6 seconds")
-            sleep(6)
+            print("OpenFigi error, retrying in 6 seconds ", error)
+            sleep(7)
     return json.loads(connection.read().decode('utf-8'))
 
-def init_fund(index, rows, holdings):
-    fund = pd.DataFrame()
-    fund.insert(0, index, holdings[index], False)
+def init_fund(holdings, custom_columns=[]):
     
-    for row in rows:
-        fund.loc[:, row] = holdings[row]
+    #ISIN, Shares, Market_Value, Country, Local_Currency, Weighting
+
+    columns = ['ISIN',
+               'Ticker',
+               'Name',
+               'Continent',
+               'Country',
+               'Stock_Exchange',
+               'Business_Screening',
+               'Finance_Screening',
+               'Shares',
+               'USD_Value',
+               'Local_Currency',
+               'Market_Value',
+               'Impure_Market_Value',
+               'Weighting',
+               'Impure_Weighting']
+
+    index = 'ISIN'
+    columns.extend(custom_columns)
+
+    fund = pd.DataFrame(columns=columns)
+    
+    
+    for column in columns:
+        if column in holdings.columns:
+            fund[column] = holdings[column]
+        else:
+            fund[column] = ''
 
     fund = fund.set_index(index)
-
-    fund.insert(1, 'Ticker', '', False)
-    fund.insert(2, 'Name', '', False)
-    fund.insert(3, 'Continent', '', True)
-    fund.insert(4, 'Business_screening', '', True)
-    fund.insert(5, 'Finance_screening', '', True)
-
+    
     return fund
 
 def get_zoya_stock(ticker):
@@ -75,8 +96,9 @@ def get_zoya_stock(ticker):
 
     business = "Unrated"
     financial = "Unrated"
+    haram_percent = 0
     
-    data = {"query": "query GetAdvancedReport($input: AdvancedReportInput!) { advancedCompliance {  report(input: $input) {businessScreen financialScreen} } }",
+    data = {"query": "query GetAdvancedReport($input: AdvancedReportInput!) { advancedCompliance {  report(input: $input) {businessScreen financialScreen nonCompliantRevenue} } }",
         "variables": {"input": {"symbol": ticker, "methodology": "AAOIFI"}}}
 
     with warnings.catch_warnings(action="ignore"):
@@ -85,6 +107,7 @@ def get_zoya_stock(ticker):
                 response = requests.post(url=url, json=data, headers=headers, verify=False) #SSL Verification turned off
                 business = response.json().get('data').get('advancedCompliance').get('report').get('businessScreen')
                 financial = response.json().get('data').get('advancedCompliance').get('report').get('financialScreen')
+                haram_percent = float(response.json().get('data').get('advancedCompliance').get('report').get('nonCompliantRevenue'))/100
                 break
             except Exception as error:
                 if "max retries" in str(error).lower():
@@ -92,7 +115,7 @@ def get_zoya_stock(ticker):
                 else:
                     break
 
-    return business, financial
+    return business, financial, haram_percent
 
 def get_zoya_regions():
 
@@ -109,12 +132,12 @@ def get_zoya_regions():
                 if "max retries" in str(error).lower():
                     print("Zoya error, retrying in 5 seconds")
                 else:
+                    print(error)
                     break
 
     return regions
 
 def get_ticker(isin, exchCode, need_name=True):
-    
     try:
         result = map_jobs([{'idType': 'ID_ISIN', 'idValue': isin, 'exchCode': exchCode}])
     except Exception as error:
@@ -130,17 +153,49 @@ def get_ticker(isin, exchCode, need_name=True):
         return ticker
 
 def set_stock_data(fund, exchCodes_list):
-    
-    for fund_index, fund_row in fund.iterrows():
-        continent = country_to_continent(fund_row['Country'])
-        exchCodes = exchCodes_list.loc[exchCodes_list['Composite Name'].str.contains(fund_row['Country'], case=False)]
-        for exchCodes_index, exchCodes_row in exchCodes.iterrows():
-            ticker, name = get_ticker(fund_index, exchCodes_row['Exchange Code'])
-            if not ticker == '':
-                break      
 
-        ticker, name = get_ticker(fund_index, 'US')
-        business, financial = get_zoya_stock(ticker)
+    usd_value = CurrencyConverter()
+    
+    for fund_index, fund_row in fund.iterrows():        
+
+        ticker = ''
+        z_ticker = ''
+        exchange = ''
+        
+        country = fund_row['Country']
+        continent = country_to_continent(country)
+        exchCodes = exchCodes_list.loc[exchCodes_list['Composite Name'].str.contains(country, case=False)]
+        if exchCodes.empty:
+            exchCodes = exchCodes_list.loc[exchCodes_list['ISO Country Code (where applicable)'].str.contains(fund_index[:2], case=False)]
+        
+        def wildcard_search():
+            for exchCodes_index, exchCodes_row in exchCodes.iterrows():
+                ticker, name = get_ticker(fund_index, exchCodes_row['Exchange Code'])
+                if not ticker == '':
+                    break
+            return ticker, name, exchCodes_row['Exchange Code']
+
+        match country:
+            case "United States":
+                exchange = 'UA'
+                ticker, name = get_ticker(fund_index, exchange)
+                if ticker == '':
+                    ticker, name, exchange = wildcard_search()                
+                    
+            case "United Kingdom":
+                exchange = 'LO'
+                ticker, name = get_ticker(fund_index, exchange)
+                if ticker == '':
+                    exchange = 'LN'
+                    ticker, name = get_ticker(fund_index, exchange)
+                   
+            case _:
+                ticker, name, exchange = wildcard_search()
+                if ticker == '':
+                    exchange = 'UA'
+                    ticker, name = get_ticker(fund_index, 'UA')
+
+        business, financial, haram_percent = get_zoya_stock(ticker)
 
         z_ticker = ''
         if business == 'Unrated':
@@ -151,28 +206,45 @@ def set_stock_data(fund, exchCodes_list):
                         z_ticker = get_ticker(fund_index, 'LN', False) + "-LN"
                 case "Oceania":
                     z_ticker = get_ticker(fund_index, 'AU', False) + "-AU"
-                    
 
-            business, financial = get_zoya_stock(z_ticker)
+            business, financial, haram_percent = get_zoya_stock(z_ticker)
+            
+            if business == 'Unrated':
+                z_ticker = get_ticker(fund_index, 'US', False)
+                business, financial, haram_percent = get_zoya_stock(z_ticker)
+
         
         fund.loc[fund.index == fund_index, ['Ticker']] = ticker
+        fund.loc[fund.index == fund_index, ['Stock_Exchange']] = exchange
         fund.loc[fund.index == fund_index, ['Name']] = name
         fund.loc[fund.index == fund_index, ['Continent']] = continent
-        fund.loc[fund.index == fund_index, ['Business_screening']] = business.capitalize()
-        fund.loc[fund.index == fund_index, ['Finance_screening']] = financial.capitalize()
+        fund.loc[fund.index == fund_index, ['USD_Value']] = usd_value.convert(fund_row['Market_Value'], fund_row['Local_Currency'], 'USD')
+        fund.loc[fund.index == fund_index, ['Business_Screening']] = business.capitalize()
+        fund.loc[fund.index == fund_index, ['Finance_Screening']] = financial.capitalize()
+        fund.loc[fund.index == fund_index, ['Impure_Market_Value']] = round(float(fund_row['Market_Value'])*haram_percent,6)
+        fund.loc[fund.index == fund_index, ['Impure_Weighting']] = round(float(fund_row['Weighting'])*haram_percent,6)
         
-        print(fund_index)
-        stock = "ISIN:" + fund_index + "\t Ticker/Name:" + ticker + " / " + name + "\t" + " SE: " + exchCodes_row['Full Exchange Name'] + " " + exchCodes_row['Composite Name']
-        compliancy = "Business: " + business + " Financial: " + financial
+        
+        print(fund_row['USD_Value'])
+        #stock = "ISIN:" + fund_index + "\t Ticker/Name:" + ticker + " / " + name + "\t" + " SE: " + exchCodes_row['Full Exchange Name'] + " " + exchCodes_row['Composite Name']
+        #compliancy = "Business: " + business + " Financial: " + financial
 
     return fund
 
 
 def main():
-    holdings_rows = ['Country','NumberOfShare','MarketValue','LocalCurrencyCode','Weighting']
     exchange_codes = get_fixed_assets('exchange_codes')
-    holdings = get_fixed_assets('holdings')
-    fund = set_stock_data(init_fund('ISIN', holdings_rows, holdings), exchange_codes)
-    fund.to_csv("fund.csv")
+    holdings_list = ['HSBC_Islamic_EM']
+    for i in holdings_list:
+        holding = i + ".csv"
+        checked = i + "_CHECKED" + ".csv"
+        holdings = pd.read_csv(holding)
+        try:
+            fund = set_stock_data(init_fund(holdings), exchange_codes)
+            fund.to_csv(checked)
+            print("done", i)
+        except Exception as error:
+            print(error)
+            print("failed", i)
 
 main()
