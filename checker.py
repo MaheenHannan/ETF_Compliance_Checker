@@ -20,19 +20,16 @@ def country_to_continent(country_name):
 def get_fixed_assets(asset):
     match asset:
         case "openfigi_apikey":
-            return 'a8c36abd-ad1a-4e5d-862e-92697a275bb8' #OpenFIGI API Key (free to use)
+            return '' #OpenFIGI API Key (free to use)
         
         case "exchange_codes":
             return pd.read_csv("OpenFIGI_Exchange_Codes.csv", encoding="unicode_escape", keep_default_na=False)
-
-        case "holdings":
-            return pd.read_csv("HSBC_World_Islamic.csv", encoding="unicode_escape")
         
         case "zoya_url":
             return "https://api.zoya.finance/graphql"
 
         case "zoya_headers":
-            return {'Authorization': 'live-98324407-8f79-40b9-97cb-36704b2e7a4c', 'Content-Type': 'application/json'} #Zoya API Key  (purchase to use)
+            return {'Authorization': '', 'Content-Type': 'application/json'} #Zoya API Key  (purchase to use)
 
 def map_jobs(jobs):
     openfigi_apikey = get_fixed_assets('openfigi_apikey')
@@ -66,7 +63,6 @@ def init_fund(holdings, custom_columns=[]):
                'Business_Screening',
                'Finance_Screening',
                'Shares',
-               'USD_Value',
                'Local_Currency',
                'Market_Value',
                'Impure_Market_Value',
@@ -206,7 +202,12 @@ def set_stock_data(fund, exchCodes_list):
                         z_ticker = get_ticker(fund_index, 'LN', False) + "-LN"
                 case "Oceania":
                     z_ticker = get_ticker(fund_index, 'AU', False) + "-AU"
-
+                case "Asia":
+                    if country == "India":
+                        z_ticker = get_ticker(fund_index, 'IB', False) + "-IB"
+                    elif country == "China":
+                        z_ticker = get_ticker(fund_index, 'TT', False) + "-TT"
+                        
             business, financial, haram_percent = get_zoya_stock(z_ticker)
             
             if business == 'Unrated':
@@ -218,23 +219,22 @@ def set_stock_data(fund, exchCodes_list):
         fund.loc[fund.index == fund_index, ['Stock_Exchange']] = exchange
         fund.loc[fund.index == fund_index, ['Name']] = name
         fund.loc[fund.index == fund_index, ['Continent']] = continent
-        fund.loc[fund.index == fund_index, ['USD_Value']] = usd_value.convert(fund_row['Market_Value'], fund_row['Local_Currency'], 'USD')
         fund.loc[fund.index == fund_index, ['Business_Screening']] = business.capitalize()
         fund.loc[fund.index == fund_index, ['Finance_Screening']] = financial.capitalize()
         fund.loc[fund.index == fund_index, ['Impure_Market_Value']] = round(float(fund_row['Market_Value'])*haram_percent,6)
         fund.loc[fund.index == fund_index, ['Impure_Weighting']] = round(float(fund_row['Weighting'])*haram_percent,6)
-        
-        
-        print(fund_row['USD_Value'])
+
         #stock = "ISIN:" + fund_index + "\t Ticker/Name:" + ticker + " / " + name + "\t" + " SE: " + exchCodes_row['Full Exchange Name'] + " " + exchCodes_row['Composite Name']
         #compliancy = "Business: " + business + " Financial: " + financial
 
+        print(fund_index)
+        
     return fund
 
 
 def main():
     exchange_codes = get_fixed_assets('exchange_codes')
-    holdings_list = ['HSBC_Islamic_EM']
+    holdings_list = ['']
     for i in holdings_list:
         holding = i + ".csv"
         checked = i + "_CHECKED" + ".csv"
